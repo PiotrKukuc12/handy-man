@@ -1,10 +1,15 @@
 require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
-const app = express();
 const cors = require('cors');
-const PORT = 3011;
+const OpenAI = require('openai');
 
+const app = express();
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const PORT = 3011;
+const ASSISTANT_ID = process.env.OPENAI_ASSISTANT_ID;
+
+// Configure CORS
 const corsOptions = {
    origin: ['http://handy-man.com.pl', 'https://handy-man.com.pl'],
    methods: ['GET', 'POST'],
@@ -12,211 +17,198 @@ const corsOptions = {
    credentials: true,
    optionsSuccessStatus: 200,
 };
-
-// Apply CORS middleware before other middleware and routes
 app.use(cors(corsOptions));
-
-// In-memory store for chat sessions
-// In a production environment, you would want to use a database
-const chatSessions = new Map();
-
-// Middleware
 app.use(express.json());
 
-// Existing Google search function
-async function searchGoogle(query) {
-   const API_KEY = process.env.GOOGLE_API_KEY;
-   const CSE_ID = process.env.GOOGLE_CX;
-   const url = `https://www.googleapis.com/customsearch/v1?q=${query}&key=${API_KEY}&cx=${CSE_ID}`;
+// In-memory session storage
+const chatSessions = new Map();
 
-   try {
-      const response = await axios.get(url);
-      const data = response.data;
-
-      if (!data.items) {
-         return [{ name: 'Brak wyników', phone: 'N/A', link: 'N/A' }];
-      }
-
-      return data.items.slice(0, 5).map((item) => {
-         const title = item.title || 'Brak nazwy';
-         const snippet = item.snippet || 'Brak opisu';
-         const link = item.link || 'Brak linku';
-
-         // Wyciąganie numeru telefonu z opisu (snippet)
-         const phoneMatch = snippet.match(/\+?\d[\d\s-]{8,14}\d/);
-         const phone = phoneMatch ? phoneMatch[0] : 'Brak numeru';
-
-         return { name: title, phone, link };
-      });
-   } catch (error) {
-      console.error('Błąd podczas wyszukiwania:', error);
-      return [{ name: 'Błąd', phone: 'N/A', link: 'N/A' }];
-   }
-}
-
-// Generate a unique session ID
-function generateSessionId() {
-   return (
-      Math.random().toString(36).substring(2, 15) +
-      Math.random().toString(36).substring(2, 15)
-   );
-}
-
-// Process user message and generate bot response
-async function processChatMessage(message, sessionId) {
-   // Get or create session
-   if (!chatSessions.has(sessionId)) {
-      chatSessions.set(sessionId, {
-         history: [
-            {
-               role: 'bot',
-               content:
-                  'Cześć! Jestem twoim asystentem do wyszukiwania złotych rączek. Powiedz mi, jakiego specjalistę szukasz i w jakiej lokalizacji?',
+const tools = [{
+    "type": "function",
+    "function": {
+        "name": "searchGoogle",
+        "description": "Search Google for a given query and return the top 5 results.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to look up on Google."
+                }
             },
-         ],
-         createdAt: Date.now(),
-      });
-   }
+            "required": ["query"],
+            "additionalProperties": false
+        },
+        "strict": true
+    }
+}];
 
-   const session = chatSessions.get(sessionId);
+// Google Search Function
+async function searchGoogle(query) {
+   try {
+      const { data } = await axios.get(
+         `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(
+            query
+         )}&key=${process.env.GOOGLE_API_KEY}&cx=${process.env.GOOGLE_CX}`
+      );
 
-   // Add user message to history
-   session.history.push({
-      role: 'user',
-      content: message,
-   });
-
-   // Determine if we need to search (most messages will trigger a search)
-   if (message.length > 2) {
-      try {
-         // Add keywords to improve search relevance
-         const searchQuery = `${message} złota rączka fachowiec`;
-         const results = await searchGoogle(searchQuery);
-
-         let botResponse;
-
-         if (
-            results.length === 0 ||
-            (results.length === 1 && results[0].name === 'Brak wyników')
-         ) {
-            botResponse =
-               'Nie znalazłem żadnych specjalistów pasujących do twojego zapytania. Możesz spróbować inaczej sformułować pytanie?';
-         } else {
-            botResponse = 'Oto wyniki wyszukiwania, które mogą Ci pomóc:';
-         }
-
-         // Add bot message to history
-         session.history.push({
-            role: 'bot',
-            content: botResponse,
-            results: results,
-         });
-
-         return {
-            message: botResponse,
-            results: results,
-         };
-      } catch (error) {
-         console.error('Error during search:', error);
-         const errorResponse =
-            'Przepraszam, wystąpił błąd podczas wyszukiwania. Spróbuj ponownie później.';
-
-         // Add error message to history
-         session.history.push({
-            role: 'bot',
-            content: errorResponse,
-         });
-
-         return {
-            message: errorResponse,
-            results: [],
-         };
-      }
-   } else {
-      const shortInputResponse =
-         'Potrzebuję więcej informacji. Jakiego specjalistę szukasz i w jakim mieście/dzielnicy?';
-
-      // Add response to history
-      session.history.push({
-         role: 'bot',
-         content: shortInputResponse,
-      });
-
-      return {
-         message: shortInputResponse,
-         results: [],
-      };
+      return (
+         data.items?.slice(0, 5).map((item) => ({
+            name: item.title || 'Brak nazwy',
+            phone:
+               item.snippet?.match(/\+?\d[\d\s-]{8,14}\d/)?.[0] ||
+               'Brak numeru',
+            link: item.link || 'Brak linku',
+         })) || [{ name: 'Brak wyników', phone: 'N/A', link: 'N/A' }]
+      );
+   } catch (error) {
+      console.error('Google search error:', error);
+      return [{ name: 'Błąd wyszukiwania', phone: 'N/A', link: 'N/A' }];
    }
 }
 
-// Clean up old sessions (runs every hour)
-setInterval(() => {
-   const now = Date.now();
-   const MAX_SESSION_AGE = 24 * 60 * 60 * 1000; // 24 hours
-
-   for (const [sessionId, session] of chatSessions.entries()) {
-      if (now - session.createdAt > MAX_SESSION_AGE) {
-         chatSessions.delete(sessionId);
-      }
-   }
-}, 60 * 60 * 1000);
-
-// Routes
-
-// Create a new chat session
-app.post('/api/chat/session', (req, res) => {
-   const sessionId = generateSessionId();
+// Session Management
+function createSession(sessionId) {
    chatSessions.set(sessionId, {
       history: [
          {
-            role: 'bot',
+            role: 'assistant',
             content:
                'Cześć! Jestem twoim asystentem do wyszukiwania złotych rączek. Powiedz mi, jakiego specjalistę szukasz i w jakiej lokalizacji?',
          },
       ],
       createdAt: Date.now(),
+      threadId: null,
    });
+   return chatSessions.get(sessionId);
+}
 
+// Handle OpenAI Function Calls
+async function handleToolCalls(threadId, runId, toolCalls) {
+   const toolOutputs = [];
+
+   for (const toolCall of toolCalls) {
+      if (toolCall.function.name === 'searchGoogle') {
+         const { query } = JSON.parse(toolCall.function.arguments);
+         const results = await searchGoogle(query);
+         toolOutputs.push({
+            tool_call_id: toolCall.id,
+            output: JSON.stringify(results),
+         });
+      }
+   }
+
+   await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
+      tool_outputs: toolOutputs,
+   });
+}
+
+// Process Messages with OpenAI
+async function processMessage(sessionId, message) {
+   const session = chatSessions.get(sessionId);
+
+   try {
+      // Create thread if not exists
+      if (!session.threadId) {
+         const thread = await openai.beta.threads.create();
+         session.threadId = thread.id;
+      }
+
+      // Add user message to thread
+      await openai.beta.threads.messages.create(session.threadId, {
+         role: 'user',
+         content: message,
+      });
+
+      // Create and monitor run
+      let run = await openai.beta.threads.runs.create(session.threadId, {
+         assistant_id: ASSISTANT_ID,
+         tools: tools, // Add the tools array here
+      });
+
+      while (true) {
+         await new Promise((resolve) => setTimeout(resolve, 1000));
+         run = await openai.beta.threads.runs.retrieve(
+            session.threadId,
+            run.id
+         );
+
+         if (run.status === 'completed') {
+            const messages = await openai.beta.threads.messages.list(
+               session.threadId,
+               {
+                  order: 'desc',
+                  limit: 1,
+               }
+            );
+
+            const assistantMessage = messages.data[0].content[0].text.value;
+
+            session.history.push(
+               { role: 'user', content: message },
+               { role: 'assistant', content: assistantMessage }
+            );
+
+            return assistantMessage;
+         }
+
+         if (run.status === 'requires_action') {
+            await handleToolCalls(
+               session.threadId,
+               run.id,
+               run.required_action.submit_tool_outputs.tool_calls
+            );
+         }
+      }
+   } catch (error) {
+      console.error('OpenAI processing error:', error);
+      return 'Wystąpił błąd podczas przetwarzania żądania.';
+   }
+}
+// Routes
+app.post('/api/chat/session', (req, res) => {
+   const sessionId = Math.random().toString(36).substring(2, 18);
+   createSession(sessionId);
    res.json({
       sessionId,
-      message:
-         'Cześć! Jestem twoim asystentem do wyszukiwania złotych rączek. Powiedz mi, jakiego specjalistę szukasz i w jakiej lokalizacji?',
+      message: chatSessions.get(sessionId).history[0].content,
    });
 });
 
-// Send a message in an existing chat session
 app.post('/api/chat/message', async (req, res) => {
    const { sessionId, message } = req.body;
-
-   if (!sessionId) {
-      return res.status(400).json({ error: 'Brak identyfikatora sesji' });
-   }
-
-   if (!message || message.trim() === '') {
-      return res.status(400).json({ error: 'Brak wiadomości' });
-   }
-
-   if (!chatSessions.has(sessionId)) {
-      return res.status(404).json({ error: 'Sesja nie istnieje' });
-   }
-
-   const response = await processChatMessage(message, sessionId);
-   res.json(response);
-});
-
-// Get chat history for a session
-app.get('/api/chat/history/:sessionId', (req, res) => {
-   const { sessionId } = req.params;
 
    if (!chatSessions.has(sessionId)) {
       return res.status(404).json({ error: 'Sesja nie istnieje' });
    }
 
    const session = chatSessions.get(sessionId);
-   res.json({ history: session.history });
+   console.log('Processing message for session:', sessionId);
+   console.log('Current thread ID:', session.threadId);
+
+   try {
+      const response = await processMessage(sessionId, message);
+      res.json({ message: response });
+   } catch (error) {
+      res.status(500).json({ error: 'Błąd przetwarzania wiadomości' });
+   }
 });
 
-// Start server
-app.listen(PORT, () => {
-   console.log(`🚀 Server działa na http://localhost:${PORT}`);
+app.get('/api/chat/history/:sessionId', (req, res) => {
+   const session = chatSessions.get(req.params.sessionId);
+   res.json(
+      session ? { history: session.history } : { error: 'Sesja nie istnieje' }
+   );
 });
+
+// Cleanup old sessions
+setInterval(() => {
+   const now = Date.now();
+   for (const [id, session] of chatSessions.entries()) {
+      if (now - session.createdAt > 86400000) chatSessions.delete(id);
+   }
+}, 3600000);
+
+app.listen(PORT, () =>
+   console.log(`🚀 Server działa na http://localhost:${PORT}`)
+);
