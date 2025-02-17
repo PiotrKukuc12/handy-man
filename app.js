@@ -27,7 +27,7 @@ const tools = [{
     "type": "function",
     "function": {
         "name": "searchGoogle",
-        "description": "Search Google for a given query and return the top 5 results.",
+        "description": "Search Google for professional handyman services in Poland related to the query. Focus on businesses with contact info.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -46,11 +46,13 @@ const tools = [{
 // Google Search Function
 async function searchGoogle(query) {
    try {
-      const { data } = await axios.get(
-         `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(
-            query
-         )}&key=${process.env.GOOGLE_API_KEY}&cx=${process.env.GOOGLE_CX}`
-      );
+     const enhancedQuery = `usługi naprawcze ${query}`;
+     const { data } = await axios.get(
+       `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(
+         enhancedQuery
+       )}&key=${process.env.GOOGLE_API_KEY}&cx=${process.env.GOOGLE_CX}&gl=pl&cr=countryPL`
+     );
+
 
       return (
          data.items?.slice(0, 5).map((item) => ({
