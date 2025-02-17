@@ -74,7 +74,7 @@ function createSession(sessionId) {
          {
             role: 'assistant',
             content:
-               'Cześć! Jestem twoim asystentem do wyszukiwania złotych rączek. Powiedz mi, jakiego specjalistę szukasz i w jakiej lokalizacji?',
+               'Cześć!',
          },
       ],
       createdAt: Date.now(),
