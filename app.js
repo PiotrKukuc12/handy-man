@@ -2,7 +2,19 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const app = express();
+const cors = require('cors');
 const PORT = 3011;
+
+const corsOptions = {
+   origin: ['http://handy-man.com.pl', 'https://handy-man.com.pl'],
+   methods: ['GET', 'POST'],
+   allowedHeaders: ['Content-Type', 'Authorization'],
+   credentials: true,
+   optionsSuccessStatus: 200,
+};
+
+// Apply CORS middleware before other middleware and routes
+app.use(cors(corsOptions));
 
 // In-memory store for chat sessions
 // In a production environment, you would want to use a database
